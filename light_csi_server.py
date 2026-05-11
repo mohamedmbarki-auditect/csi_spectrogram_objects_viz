@@ -10,6 +10,7 @@ from pathlib import Path
 import os
 
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
 import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse
@@ -17,16 +18,14 @@ import serial
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("csi_ultimate")
+logger = logging.getLogger("csi_pose_skeleton")
 
 CONFIG = {
     "serial_port": "/dev/ttyACM0",
     "baud_rate": 921600,
     "sample_rate": 50,
     "calibration_samples": 300,
-    "smoothing_alpha": 0.06,
-    "glitch_threshold": 0.4,
-    "fft_window": 64
+    "smoothing_alpha": 0.05
 }
 
 class CSIReader:
@@ -50,100 +49,97 @@ class CSIReader:
 class CSIProcessor:
     def __init__(self, config):
         self.config = config
-        self.last_normalized = None
-        self.last_mean_amp = None
+        self.subcarrier_ema = None
+        self.ema_alpha = 0.03
+        self.heatmap_ema = np.zeros(64)
         
-        # Buffers
         self.score_buffer = deque(maxlen=10)
         self.smoothed_score = 0.0
-        self.fft_buffer = deque(maxlen=config["fft_window"])
-        self.rssi_history = deque(maxlen=50)
         
-        # State
         self.is_calibrated = False
         self.baseline_noise = 0.0
         self.calibration_buffer = []
         self.frame_count = 0
 
-    def get_spectrogram(self, current_val):
-        self.fft_buffer.append(current_val)
-        if len(self.fft_buffer) < self.config["fft_window"]:
-            return [0.0] * 32
-        data = np.array(self.fft_buffer)
-        windowed = data * np.hanning(len(data))
-        fft_res = np.abs(np.fft.rfft(windowed))
-        fft_res = np.log1p(fft_res) / 5.0
-        return [float(round(x, 4)) for x in fft_res[:32]]
+    def extract_skeleton(self, bins):
+        # POSE ESTIMATION HEURISTICS
+        # We find the 'mass' of joints based on subcarrier intensity
+        if np.sum(bins) < 2.0: return None
+        
+        indices = np.arange(64)
+        moving_indices = indices[bins > 0.15]
+        if len(moving_indices) < 5: return None
+        
+        # Head: The highest subcarrier with significant movement
+        head_y = float(np.max(moving_indices))
+        # Feet: The lowest subcarrier
+        feet_y = float(np.min(moving_indices))
+        # Torso: Centroid of the mass
+        torso_y = float(np.average(moving_indices, weights=bins[moving_indices]))
+        
+        # Hands: Looking for outlier peaks (limbs extending)
+        # We assume hands are the peaks furthest from the torso
+        diff_from_torso = np.abs(moving_indices - torso_y)
+        hand_idx = moving_indices[np.argmax(diff_from_torso)]
+        hand_y = float(hand_idx)
 
-    def get_proximity(self, current_ssd):
-        if len(self.rssi_history) < 30: return "Analyzing..."
-        rssi_var = np.var(self.rssi_history)
-        ratio = current_ssd / (rssi_var + 1e-6)
-        if ratio < 500: return "Near"
-        return "Far"
+        return {
+            "head": head_y,
+            "torso": torso_y,
+            "feet": feet_y,
+            "hand": hand_y
+        }
 
     def process(self, line):
         if not line or not line.startswith("CSI_DATA,"): return None
         try:
             parts = line.split(",")
             rssi = float(parts[3])
-            self.rssi_history.append(rssi)
             
             bracket_start = line.find("\"[")
             bracket_end = line.find("]", bracket_start)
             csi_raw = line[bracket_start+2:bracket_end]
-            
-            csi_values = []
-            for v in csi_raw.split(","):
-                v = v.strip()
-                if v:
-                    try: csi_values.append(int(v))
-                    except: continue
+            csi_values = [int(v.strip()) for v in csi_raw.split(",") if v.strip()]
             
             if len(csi_values) < 120: return None
             
-            # 1. Extraction & Glitch Rejection
             imag = np.array(csi_values[0::2][:64], dtype=np.float32)
             real = np.array(csi_values[1::2][:64], dtype=np.float32)
             amplitude = np.sqrt(real**2 + imag**2)
-            mean_amp = np.mean(amplitude)
             
-            if self.last_mean_amp is not None:
-                if abs(mean_amp - self.last_mean_amp) / (self.last_mean_amp + 1e-6) > self.config["glitch_threshold"]:
-                    self.last_mean_amp = mean_amp
-                    return None
-            self.last_mean_amp = mean_amp
-            
-            # 2. Normalization & SSD
-            normalized = amplitude / (mean_amp + 1e-6)
-            if self.last_normalized is None:
-                self.last_normalized = normalized
+            if self.subcarrier_ema is None:
+                self.subcarrier_ema = amplitude.copy()
                 return None
             
-            diff = normalized[10:54] - self.last_normalized[10:54]
-            raw_ssd = float(np.sum(diff**2))
-            self.last_normalized = normalized
+            diff = np.abs(amplitude - self.subcarrier_ema)
+            self.subcarrier_ema = (1 - self.ema_alpha) * self.subcarrier_ema + self.ema_alpha * amplitude
             
-            # 3. Filtering
-            self.score_buffer.append(raw_ssd)
+            smooth_diff = gaussian_filter1d(diff, sigma=1.0)
+            
+            # SCORE
+            global_diff = float(np.sum(diff[10:54]))
+            self.score_buffer.append(global_diff)
             median_score = float(np.median(list(self.score_buffer)))
             alpha = self.config["smoothing_alpha"]
             self.smoothed_score = alpha * median_score + (1 - alpha) * self.smoothed_score
             self.frame_count += 1
             
-            # 4. Calibration
             if not self.is_calibrated:
                 self.calibration_buffer.append(self.smoothed_score)
                 if len(self.calibration_buffer) >= self.config["calibration_samples"]:
                     self.baseline_noise = float(np.percentile(self.calibration_buffer, 90))
                     self.is_calibrated = True
-                    logger.info(f"Ultimate Calibrated! Baseline: {self.baseline_noise:.6f}")
                 return {"type": "calibrating", "progress": len(self.calibration_buffer)/self.config["calibration_samples"], "calibrating": True}
 
-            # 5. Build Ultimate Frame
             movement_index = self.smoothed_score / (self.baseline_noise + 1e-9)
-            is_moving = movement_index > 2.0 
+            is_moving = movement_index > 2.0
             
+            # MAP & SKELETON
+            target_heatmap = np.clip(smooth_diff * 0.1, 0, 1) if is_moving else np.zeros(64)
+            self.heatmap_ema = (1 - 0.2) * self.heatmap_ema + 0.2 * target_heatmap
+            
+            skeleton = self.extract_skeleton(self.heatmap_ema) if is_moving else None
+
             return {
                 "type": "update",
                 "timestamp": time.time(),
@@ -152,9 +148,8 @@ class CSIProcessor:
                 "rssi": float(round(rssi, 1)),
                 "frame_count": self.frame_count,
                 "movement_type": "MOVE" if is_moving else "STILL",
-                "spectrogram": self.get_spectrogram(movement_index),
-                "spatial_profile": [float(x) for x in normalized[::8]],
-                "proximity": self.get_proximity(raw_ssd) if is_moving else "--"
+                "subcarrier_map": [float(round(x, 4)) for x in self.heatmap_ema],
+                "skeleton": skeleton
             }
         except Exception as e:
             logger.error(f"Process error: {e}")
@@ -172,7 +167,8 @@ async def calibrate():
     processor.is_calibrated = False
     processor.calibration_buffer = []
     processor.smoothed_score = 0.0
-    processor.fft_buffer.clear()
+    processor.subcarrier_ema = None
+    processor.heatmap_ema = np.zeros(64)
     return {"message": "Calibration restarted"}
 
 @app.websocket("/ws")

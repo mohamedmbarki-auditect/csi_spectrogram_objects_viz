@@ -3,216 +3,186 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CSI Spectrogram & Object Viz</title>
+    <title>CSI Diagnostic Dashboard 📡📊</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Outfit', sans-serif; background: #0f172a; color: #f8fafc; }
-        .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); }
-        .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+        body { font-family: 'Outfit', sans-serif; background: #0f172a; color: #f8fafc; overflow-x: hidden; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        #spectrogramCanvas { image-rendering: pixelated; width: 100%; height: 350px; border-radius: 8px; }
+        #chartCanvas { width: 100%; height: 120px; border-radius: 8px; }
     </style>
 </head>
 <body>
     <nav class="bg-slate-900 border-b border-slate-800 px-6 py-4 mb-6">
         <div class="max-w-7xl mx-auto flex justify-between items-center">
-            <h1 class="text-xl font-bold text-blue-400">CSI Visual Intelligence 📡👁️</h1>
-            <div id="connectionStatus" class="flex items-center">
-                <span class="status-dot" style="background:#fbbf24"></span>
-                <span class="text-sm text-slate-400">Connecting...</span>
+            <h1 class="text-xl font-bold text-blue-400">CSI Diagnostic Analytics</h1>
+            <div id="connectionStatus" class="flex items-center gap-2 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
+                <span class="status-dot bg-amber-400"></span>
+                <span class="text-xs text-slate-400 uppercase tracking-widest font-bold">Connecting</span>
             </div>
         </div>
     </nav>
 
     <div class="max-w-7xl mx-auto p-6">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div class="card p-4 text-center">
-                <div class="text-slate-400 text-sm">Status</div>
-                <div class="text-xl font-bold mt-1" id="movementType">---</div>
+        <!-- Top Stats Row -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <div class="card p-6 flex flex-col items-center justify-center text-center">
+                <div class="text-[10px] text-slate-500 uppercase tracking-widest mb-1 font-bold">Signal Strength (RSSI)</div>
+                <div id="rssiVal" class="text-4xl font-bold text-blue-400">--</div>
+                <div class="text-[10px] text-slate-600 mt-1">DBM (RAW)</div>
             </div>
-            <div class="card p-4 text-center">
-                <div class="text-slate-400 text-sm">Proximity</div>
-                <div class="text-xl font-bold text-orange-400 mt-1" id="proximityValue">---</div>
+            <div class="card p-6 flex flex-col items-center justify-center text-center border-l-4 border-l-blue-500">
+                <div class="text-[10px] text-slate-500 uppercase tracking-widest mb-1 font-bold">Movement Index</div>
+                <div id="moveVal" class="text-4xl font-bold text-white">0.00</div>
+                <div class="text-[10px] text-slate-600 mt-1 uppercase" id="moveStatus">Static</div>
             </div>
-            <div class="card p-4 text-center">
-                <div class="text-slate-400 text-sm">Signal</div>
-                <div class="text-xl font-bold text-blue-400 mt-1" id="rssiValue">---</div>
-            </div>
-        </div>
-
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <!-- 2D Wave Viz -->
-            <div class="card p-6">
-                <h3 class="text-lg font-semibold mb-4 text-blue-400">2D Fresnel Field & Ghost Object</h3>
-                <div class="relative w-full bg-black rounded-lg overflow-hidden" style="height: 300px;">
-                    <canvas id="waveCanvas" class="w-full h-full"></canvas>
-                    <div class="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-blue-500">TX</div>
-                    <div class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-purple-500">RX</div>
-                </div>
-            </div>
-            <!-- Spectrogram -->
-            <div class="card p-6">
-                <h3 class="text-lg font-semibold mb-4 text-blue-400">Doppler Spectrogram</h3>
-                <div class="relative w-full bg-black rounded-lg overflow-hidden" style="height: 300px;">
-                    <canvas id="spectroCanvas" class="w-full h-full"></canvas>
-                    <div class="absolute left-2 top-2 text-[10px] text-slate-600">FAST</div>
-                    <div class="absolute left-2 bottom-2 text-[10px] text-slate-600">SLOW</div>
-                </div>
+            <div class="card p-6 flex flex-col items-center justify-center text-center">
+                <div class="text-[10px] text-slate-500 uppercase tracking-widest mb-1 font-bold">Total Frames</div>
+                <div id="frameVal" class="text-4xl font-bold text-slate-300">0</div>
+                <div class="text-[10px] text-slate-600 mt-1 uppercase">CSI Samples</div>
             </div>
         </div>
 
+        <!-- Main Spectrogram -->
         <div class="card p-6 mb-6">
-            <h3 class="text-lg font-semibold mb-4 text-slate-400">Intensity History</h3>
-            <div style="height: 120px;">
-                <canvas id="intensityChart"></canvas>
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-widest">CSI Amplitude Spectrogram (64 Subcarriers)</h3>
+                <div class="text-[10px] text-slate-600 font-mono">TIME PROPAGATION →</div>
+            </div>
+            <div class="bg-black p-1 rounded-lg border border-slate-700 shadow-inner">
+                <canvas id="spectrogramCanvas"></canvas>
             </div>
         </div>
 
-        <div class="flex justify-between items-center bg-slate-900 p-4 rounded-lg border border-slate-800">
-            <div class="text-slate-400 text-xs">
-                Frames: <span id="frameCount">0</span> | Mode: Multimodal Visualization
+        <!-- Intensity Chart -->
+        <div class="card p-6 mb-6">
+            <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Movement Intensity Timeline</h3>
+            <div class="bg-slate-900 p-2 rounded-lg border border-slate-800">
+                <canvas id="chartCanvas"></canvas>
             </div>
-            <button onclick="calibrate()" class="px-4 py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-500 transition-all">RECALIBRATE</button>
+        </div>
+
+        <!-- Control Footer -->
+        <div class="flex justify-between items-center bg-slate-900 p-4 rounded-xl border border-slate-800">
+            <div class="flex gap-4">
+                <button onclick="calibrate()" class="px-6 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-500 transition-all shadow-lg shadow-blue-900/40">RECALIBRATE FIELD</button>
+                <button onclick="window.location.reload()" class="px-6 py-2 bg-slate-800 text-slate-300 rounded-lg font-bold hover:bg-slate-700 transition-all">REFRESH UI</button>
+            </div>
+            <div class="text-[10px] text-slate-600 font-mono uppercase">
+                Hardware: ESP32-C3 | Serial: 921600 Baud | Engine: High-Res EMA
+            </div>
         </div>
     </div>
 
     <script>
         let ws = null;
-        let intensityData = [];
-        let intensityChart;
-        let spectroCanvas, spectroCtx;
-        let waveCanvas, waveCtx;
-        const MAX_DATA_POINTS = 100;
+        let specCanvas, specCtx;
+        let chartCanvas, chartCtx;
+        let chartData = new Array(200).fill(0);
+        let sweepSpeed = 2;
 
-        function initCharts() {
-            const ctx = document.getElementById('intensityChart').getContext('2d');
-            intensityChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: Array(MAX_DATA_POINTS).fill(''),
-                    datasets: [{
-                        data: Array(MAX_DATA_POINTS).fill(null),
-                        borderColor: '#60a5fa',
-                        backgroundColor: 'rgba(96, 165, 250, 0.1)',
-                        fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false, animation: false,
-                    plugins: { legend: { display: false } },
-                    scales: { x: { display: false }, y: { display: false, beginAtZero: true } }
-                }
-            });
+        function init() {
+            specCanvas = document.getElementById('spectrogramCanvas');
+            specCtx = specCanvas.getContext('2d');
+            chartCanvas = document.getElementById('chartCanvas');
+            chartCtx = chartCanvas.getContext('2d');
 
-            spectroCanvas = document.getElementById('spectroCanvas');
-            spectroCtx = spectroCanvas.getContext('2d');
-            waveCanvas = document.getElementById('waveCanvas');
-            waveCtx = waveCanvas.getContext('2d');
             resize();
             window.addEventListener('resize', resize);
-        }
-
-        function resize() {
-            spectroCanvas.width = spectroCanvas.offsetWidth;
-            spectroCanvas.height = spectroCanvas.offsetHeight;
-            waveCanvas.width = waveCanvas.offsetWidth;
-            waveCanvas.height = waveCanvas.offsetHeight;
+            connectWebSocket();
+            requestAnimationFrame(drawLoop);
         }
 
         function drawSpectrogram(bins) {
-            const w = spectroCanvas.width, h = spectroCanvas.height;
-            const binH = h / bins.length;
-            const img = spectroCtx.getImageData(2, 0, w - 2, h);
-            spectroCtx.putImageData(img, 0, 0);
+            const w = specCanvas.width, h = specCanvas.height;
+            const binH = h / 64;
+
+            // Shift
+            const img = specCtx.getImageData(sweepSpeed, 0, w - sweepSpeed, h);
+            specCtx.putImageData(img, 0, 0);
+            
+            // New Column
             bins.forEach((val, i) => {
-                const hue = 240 - (val * 240);
-                const light = Math.min(100, val * 100);
-                spectroCtx.fillStyle = `hsla(${hue}, 100%, ${light}%, ${val})`;
-                spectroCtx.fillRect(w - 2, h - (i + 1) * binH, 2, binH);
+                const alpha = Math.min(1, val * 5);
+                const hue = 220 - (val * 200); // Blue to Red
+                specCtx.fillStyle = `hsla(${hue}, 100%, 50%, ${alpha})`;
+                specCtx.fillRect(w - sweepSpeed, h - (i + 1) * binH, sweepSpeed, binH);
             });
         }
 
-        function drawWaveField(profile, moveScore) {
-            const w = waveCanvas.width, h = waveCanvas.height, ctx = waveCtx;
-            const time = Date.now() / 1000;
-            ctx.clearRect(0, 0, w, h);
-            const txX = 60, rxX = w - 60, midY = h / 2;
+        function drawChart(val) {
+            chartData.push(val);
+            if (chartData.length > 300) chartData.shift();
 
-            // Find peak disruption
-            let maxDev = 0, peakBin = -1;
-            profile.forEach((val, i) => {
-                const dev = Math.abs(val - 1.0);
-                if (dev > maxDev) { maxDev = dev; peakBin = i; }
+            const w = chartCanvas.width, h = chartCanvas.height;
+            chartCtx.clearRect(0, 0, w, h);
+            
+            chartCtx.beginPath();
+            chartCtx.strokeStyle = '#3b82f6';
+            chartCtx.lineWidth = 2;
+            chartCtx.lineJoin = 'round';
+            
+            const step = w / chartData.length;
+            chartData.forEach((d, i) => {
+                const y = h - (d / 10) * h;
+                if (i === 0) chartCtx.moveTo(0, y);
+                else chartCtx.lineTo(i * step, y);
             });
+            chartCtx.stroke();
 
-            const isMoving = moveScore > 0.5;
-            let objectY = isMoving ? (peakBin - 3.5) * 25 : 0;
-
-            if (isMoving) {
-                const grad = ctx.createRadialGradient(w/2, midY + objectY, 0, w/2, midY + objectY, 40);
-                grad.addColorStop(0, 'rgba(251, 146, 60, 0.4)');
-                grad.addColorStop(1, 'rgba(251, 146, 60, 0)');
-                ctx.fillStyle = grad;
-                ctx.beginPath(); ctx.arc(w/2, midY + objectY, 40, 0, Math.PI * 2); ctx.fill();
-            }
-
-            ctx.beginPath(); ctx.arc(txX, midY, 6, 0, Math.PI * 2); ctx.fillStyle = '#60a5fa'; ctx.fill();
-            ctx.beginPath(); ctx.arc(rxX, midY, 6, 0, Math.PI * 2); ctx.fillStyle = '#c084fc'; ctx.fill();
-
-            profile.forEach((val, i) => {
-                const bulge = 25 + (i * 18);
-                const intensity = Math.min(1, val * 0.5);
-                const dist = Math.abs(bulge - Math.abs(objectY));
-                const warp = (isMoving && dist < 30) ? (30 - dist) * (objectY > 0 ? 1 : -1) * 0.5 : 0;
-
-                ctx.beginPath();
-                ctx.moveTo(txX, midY);
-                ctx.quadraticCurveTo(w/2, midY - bulge + warp, rxX, midY);
-                ctx.moveTo(txX, midY);
-                ctx.quadraticCurveTo(w/2, midY + bulge + warp, rxX, midY);
-                
-                const alpha = 0.1 + (intensity * 0.4);
-                const active = isMoving && dist < 20;
-                ctx.strokeStyle = active ? `rgba(239, 68, 68, ${alpha + 0.3})` : `rgba(96, 165, 250, ${alpha})`;
-                ctx.lineWidth = (active ? 3 : 1);
-                ctx.setLineDash([20, 30]); ctx.lineDashOffset = -time * 50; ctx.stroke();
-            });
-            ctx.setLineDash([]);
+            // Fill
+            chartCtx.lineTo(w, h);
+            chartCtx.lineTo(0, h);
+            chartCtx.fillStyle = 'rgba(59, 130, 246, 0.1)';
+            chartCtx.fill();
         }
 
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws`;
-            ws = new WebSocket(wsUrl);
-            ws.onopen = () => { document.getElementById('connectionStatus').innerHTML = '<span class="status-dot" style="background:#22c55e"></span><span class="text-xs">Connected</span>'; };
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+            
+            ws.onopen = () => {
+                const dot = document.querySelector('.status-dot');
+                dot.className = 'status-dot bg-green-500';
+                document.querySelector('#connectionStatus span:last-child').textContent = 'Live';
+            };
+
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'calibrating') {
-                    document.getElementById('movementType').textContent = 'CALIBRATING...';
+                    document.getElementById('moveVal').textContent = 'CAL...';
                     return;
                 }
-                const isMoving = data.movement_type === 'MOVE';
-                document.getElementById('movementType').textContent = isMoving ? 'MOVEMENT' : 'STILL';
-                document.getElementById('movementType').className = 'text-xl font-bold mt-1 ' + (isMoving ? 'text-green-400' : 'text-blue-400');
-                document.getElementById('proximityValue').textContent = data.proximity || '--';
-                document.getElementById('rssiValue').textContent = (data.rssi || '--') + ' dBm';
+
+                document.getElementById('rssiVal').textContent = data.rssi;
+                document.getElementById('moveVal').textContent = data.movement_value.toFixed(2);
+                document.getElementById('frameVal').textContent = data.frame_count;
                 
-                intensityData.push(data.presence_value || 0);
-                if (intensityData.length > MAX_DATA_POINTS) intensityData.shift();
-                intensityChart.data.datasets[0].data = [...intensityData, ...Array(MAX_DATA_POINTS - intensityData.length).fill(null)];
-                intensityChart.update('none');
+                const status = document.getElementById('moveStatus');
+                status.textContent = data.movement_type;
+                status.className = data.movement_type === 'MOVE' ? 'text-[10px] mt-1 uppercase text-blue-400 font-bold' : 'text-[10px] mt-1 uppercase text-slate-600';
 
-                if (data.spectrogram) drawSpectrogram(data.spectrogram);
-                if (data.spatial_profile) drawWaveField(data.spatial_profile, data.movement_value || 0);
-
-                document.getElementById('frameCount').textContent = data.frame_count || 0;
+                if (data.subcarrier_map) {
+                    drawSpectrogram(data.subcarrier_map);
+                    drawChart(data.movement_value);
+                }
             };
-            ws.onclose = () => { setTimeout(connectWebSocket, 3000); };
         }
 
-        async function calibrate() { await fetch('/calibrate', { method: 'POST' }); }
-        initCharts();
-        connectWebSocket();
+        function resize() {
+            specCanvas.width = specCanvas.offsetWidth;
+            specCanvas.height = specCanvas.offsetHeight;
+            chartCanvas.width = chartCanvas.offsetWidth;
+            chartCanvas.height = chartCanvas.offsetHeight;
+        }
+
+        async function calibrate() {
+            await fetch('/calibrate', { method: 'POST' });
+        }
+
+        init();
     </script>
 </body>
 </html>
